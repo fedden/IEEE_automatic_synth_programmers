@@ -1,0 +1,2 @@
+model_checkpoint_path: "/home/tollie/Development/TensorFlowSynthProgrammers/data/overriden/six_operator/six_dexed_ieee.tfl.ckpt-24375"
+all_model_checkpoint_paths: "/home/tollie/Development/TensorFlowSynthProgrammers/data/overriden/six_operator/six_dexed_ieee.tfl.ckpt-24375"

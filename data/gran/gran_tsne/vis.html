@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>t-SNE granulator VST visualisation</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<style>
+			body {
+				background-color: #000000;
+				margin: 0px;
+				overflow: hidden;
+				font-family:Monospace;
+				font-size:13px;
+				text-align:center;
+				font-weight: bold;
+				text-align:center;
+			}
+			a {
+				color:#0078ff;
+			}
+			#info {
+				color:#fff;
+				position: absolute;
+				top: 0px; width: 100%;
+				padding: 5px;
+				z-index:100;
+			}
+		</style>
+	</head>
+	<body>
+
+
+		<script src="js/three.min.js"></script>
+		<script src="js/Octree.js"></script>
+		<script src="js/Detector.js"></script>
+		<script src="js/controls/TrackballControls.js"></script>
+		<script src="js/libs/stats.min.js"></script>
+
+		<script>
+			var camera, scene, renderer;
+			var controls, stats;
+			var tracker;
+			var info;
+			var octree;
+			var objects = [];
+			var objectsSearch = [];
+			var totalFaces = 0;
+			var simpleMeshCount = 500;
+			var radius = 150;
+			var radiusMax = radius * 10;
+			var radiusMaxHalf = radiusMax * 0.5;
+			var radiusSearch = radius * 0.75;
+			var baseColor = 0xffffff;
+			var foundColor = 0x12C0E3;
+			var intersectColor = 0xFF0000;
+			var clock = new THREE.Clock();
+			var searchDelay = 1;
+			var searchInterval = 0;
+			var useOctree = true;
+			var raycaster = new THREE.Raycaster();
+			var mouse = new THREE.Vector2();
+			var intersected;
+			var scale = 8;
+			var patch = undefined;
+			var listener = new THREE.AudioListener();
+			// create a global audio source
+			var sound = new THREE.Audio( listener );
+			var audioLoader = new THREE.AudioLoader();
+
+			init();
+			animate();
+			function init() {
+				// standard three scene, camera, renderer
+				scene = new THREE.Scene();
+				camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 1, radius * 100 );
+				camera.add( listener );
+				camera.position.z = radius * 13;
+				scene.add( camera );
+				renderer = new THREE.WebGLRenderer();
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				document.body.appendChild( renderer.domElement );
+
+				// create octree
+				octree = new THREE.Octree( {
+					// uncomment below to see the octree (may kill the fps)
+					//scene: scene,
+					// when undeferred = true, objects are inserted immediately
+					// instead of being deferred until next octree.update() call
+					// this may decrease performance as it forces a matrix update
+					undeferred: false,
+					// set the max depth of tree
+					depthMax: Infinity,
+					// max number of objects before nodes split or merge
+					objectsThreshold: 8,
+					// percent between 0 and 1 that nodes will overlap each other
+					// helps insert objects that lie over more than one node
+					overlapPct: 0.15
+				} );
+
+				// lights
+				var ambient = new THREE.AmbientLight( 0x101010 );
+				scene.add( ambient );
+				var directionalLight = new THREE.DirectionalLight( 0xffffff, 0.7 );
+				directionalLight.position.set( 1, 1, 2 ).normalize();
+				scene.add( directionalLight );
+				scene.fog = new THREE.FogExp2( 0x000000, 0.0005 );
+
+				// load dataset
+				var request = new XMLHttpRequest();
+			    request.open("GET", "gran_tsne.json", false);
+			    request.send(null);
+				var dataset = JSON.parse(request.responseText);
+				console.log();
+
+				// create all objects
+				var simpleGeometry = new THREE.BoxGeometry(1, 1, 1);
+				for (var i = 0; i < dataset.length; i++) {
+
+					patch = dataset[i];
+
+					totalFaces += simpleGeometry.faces.length;
+					var simpleMaterial = new THREE.MeshBasicMaterial();
+					simpleMaterial.color.setHex( baseColor );
+					modifyOctree(simpleGeometry, simpleMaterial, patch, scale);
+				}
+
+				// camera controls
+				controls = new THREE.TrackballControls( camera );
+				controls.rotateSpeed = 1.0;
+				controls.zoomSpeed = 1.2;
+				controls.panSpeed = 0.8;
+				controls.noZoom = false;
+				controls.noPan = false;
+				controls.staticMoving = true;
+				controls.dynamicDampingFactor = 0.3;
+				// info
+				info = document.createElement( 'div' );
+				info.style.position = 'absolute';
+				info.style.top = '0';
+				info.style.width = '100%';
+				info.style.textAlign = 'center';
+				info.style.padding = '10px';
+				info.style.background = '#FFFFFF';
+				info.innerHTML = '';
+				document.body.appendChild( info );
+				// stats
+				stats = new Stats();
+				document.body.appendChild( stats.dom );
+				// bottom container
+				var container = document.createElement( 'div' );
+				container.style.position = 'absolute';
+				container.style.bottom = '0';
+				container.style.width = '100%';
+				container.style.textAlign = 'center';
+				document.body.appendChild( container );
+				// tracker
+				tracker = document.createElement( 'div' );
+				tracker.style.width = '100%';
+				tracker.style.padding = '10px';
+				tracker.style.background = '#FFFFFF';
+				container.appendChild( tracker );
+
+				// events
+				renderer.domElement.addEventListener( 'mousemove', onDocumentMouseMove, false );
+				window.addEventListener( 'resize', onWindowResize, false );
+			}
+			function toggleOctree () {
+				useOctree = !useOctree;
+			}
+			function animate() {
+				// note: three.js includes requestAnimationFrame shim
+				requestAnimationFrame( animate );
+				render();
+				stats.update();
+			}
+			function render() {
+				controls.update();
+				renderer.render( scene, camera );
+				// update octree post render
+				// this ensures any objects being added
+				// have already had their matrices updated
+				octree.update();
+			}
+
+			function modifyOctree(geometry, material, patch, scale) {
+				var mesh;
+				if ( geometry ) {
+					// create new object
+					mesh = new THREE.Mesh( geometry, material );
+					mesh.audio = patch['audio_path'];
+					mesh.spec = patch['spec_path'];
+					mesh.patch = patch['patch'];
+					var position = new THREE.Vector3(patch['x'] * radiusMax - radiusMaxHalf,
+					                                 patch['y'] * radiusMax - radiusMaxHalf,
+													 patch['z'] * radiusMax - radiusMaxHalf);
+					// give new object a random position, rotation, and scale
+					mesh.position.set(position.x, position.y, position.z);
+					mesh.rotation.set(0, 0, 0);
+					mesh.scale.x = mesh.scale.y = mesh.scale.z = scale;
+					// add new object to octree and scene
+					// NOTE: octree object insertion is deferred until after the next render cycle
+					octree.add( mesh, { useFaces: true } );
+					scene.add( mesh );
+					// store object
+					objects.push( mesh );
+				}
+			}
+
+			function onWindowResize() {
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+				renderer.setSize( window.innerWidth, window.innerHeight );
+			}
+			function onDocumentMouseMove( event ) {
+				event.preventDefault();
+				mouse.x = ( event.clientX / window.innerWidth ) * 2 - 1;
+				mouse.y = - ( event.clientY / window.innerHeight ) * 2 + 1;
+				raycaster.setFromCamera( mouse, camera );
+				var octreeObjects;
+				var numObjects;
+				var numFaces = 0;
+				var intersections;
+				octreeObjects = octree.search( raycaster.ray.origin, raycaster.ray.far, true, raycaster.ray.direction );
+				intersections = raycaster.intersectOctreeObjects( octreeObjects );
+				numObjects = octreeObjects.length;
+				for ( var i = 0, il = numObjects; i < il; i++ ) {
+					numFaces += octreeObjects[ i ].faces.length;
+				}
+
+				if ( intersections.length > 0 ) {
+					if ( intersected != intersections[ 0 ].object ) {
+						if ( intersected ) intersected.material.color.setHex( baseColor );
+						intersected = intersections[ 0 ].object;
+						intersected.material.color.setHex( intersectColor );
+
+						//Load a sound and set it as the Audio object's buffer
+						audioLoader.load( 'wavs' + intersected.audio.substring(15), function( buffer ) {
+							sound.setBuffer( buffer );
+							sound.setLoop(false);
+							sound.play();
+						});
+
+						info.innerHTML = 'patch: [' + intersected.patch + ']';
+					}
+					document.body.style.cursor = 'pointer';
+
+				}
+				else if ( intersected ) {
+					intersected.material.color.setHex( baseColor );
+					info.innerHTML = '';
+					intersected = null;
+					document.body.style.cursor = 'auto';
+				}
+				// update tracker
+				tracker.innerHTML = 'Octree search found [ ' + numObjects + ' / ' + objects.length + ' ] objects, [ ' + numFaces + ' / ' + totalFaces + ' ] faces, and [ ' + intersections.length + ' ] intersections.';
+			}
+		</script>
+	</body>
+</html>

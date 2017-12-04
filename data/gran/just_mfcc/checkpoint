@@ -1,0 +1,2 @@
+model_checkpoint_path: "/home/tollie/Development/TensorFlowSynthProgrammers/data/gran/model.tfl.ckpt-276810"
+all_model_checkpoint_paths: "/home/tollie/Development/TensorFlowSynthProgrammers/data/gran/model.tfl.ckpt-276810"
